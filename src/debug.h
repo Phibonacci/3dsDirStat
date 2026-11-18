@@ -33,6 +33,7 @@ void dbg_frame_done(void);      // after the frame is rendered: shots, frame++
 void dbg_scan_frame_done(void); // after a scan progress frame is rendered
 bool dbg_scan_cancel(void);     // true once if the script cancels the scan
 bool dbg_quit(void);
+void dbg_log(const char *msg);  // append a line to sdmc:/logs/log.txt
 #else
 static inline void dbg_init(void) {}
 static inline void dbg_input(Input *in) { (void)in; }
@@ -40,6 +41,7 @@ static inline void dbg_frame_done(void) {}
 static inline void dbg_scan_frame_done(void) {}
 static inline bool dbg_scan_cancel(void) { return false; }
 static inline bool dbg_quit(void) { return false; }
+static inline void dbg_log(const char *msg) { (void)msg; }
 #endif
 
 #endif // DEBUG_H

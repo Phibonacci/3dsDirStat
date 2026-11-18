@@ -5,6 +5,7 @@
 #include "treemap.h"
 #include "debug.h"
 #include "fsops.h"
+#include "sound.h"
 
 #include <3ds.h>
 #include <citro2d.h>
@@ -67,36 +68,54 @@ static void enter_dir(ui_state *s, DirEntry *dir, int sel)
 
 static void open_selected(ui_state *s)
 {
-    if (s->sel < 0) return;
-    DirEntry *c = s->dir->children[s->sel];
-    if (c->is_dir && c->nchildren > 0)
+    DirEntry *c = s->sel >= 0 ? s->dir->children[s->sel] : NULL;
+    if (c && c->is_dir && c->nchildren > 0) {
         enter_dir(s, c, 0);
+        sound_play(SFX_OPEN);
+    } else {
+        sound_play(SFX_BUMP);          // a file, or an empty folder
+    }
 }
 
 static void go_up(ui_state *s)
 {
     DirEntry *from = s->dir, *parent = from->parent;
-    if (!parent) return;
+    if (!parent) { sound_play(SFX_BUMP); return; }
     int idx = 0;
     for (int i = 0; i < parent->nchildren; i++)
         if (parent->children[i] == from) { idx = i; break; }
     enter_dir(s, parent, idx);
+    sound_play(SFX_BACK);
 }
 
 static void move_sel(ui_state *s, int delta)
 {
+    // Bump once when hitting an end of the list, not on every key repeat.
+    static bool bumped = false;
     int n = s->dir->nchildren;
-    if (n == 0) return;
     int sel = s->sel + delta;
-    if (sel < 0) sel = 0;
     if (sel >= n) sel = n - 1;
+    if (sel < 0) sel = n > 0 ? 0 : -1;
+    if (sel == s->sel) {
+        if (!bumped) sound_play(SFX_BUMP);
+        bumped = true;
+        return;
+    }
+    bumped = false;
     s->sel = sel;
     ensure_visible(s);
+    sound_play(SFX_MOVE);
+}
+
+static void toggle_legend(ui_state *s)
+{
+    s->legend = !s->legend;
+    sound_play(SFX_PAGE);
 }
 
 static void back(ui_state *s)
 {
-    if (s->legend) s->legend = false;
+    if (s->legend) toggle_legend(s);
     else           go_up(s);
 }
 
@@ -128,11 +147,12 @@ bool ui_is_boot_file(const DirEntry *e)
 // deleted here.
 static void ask_delete(ui_state *s)
 {
-    if (s->sel < 0 || s->sel >= s->dir->nchildren) return;
+    if (s->sel < 0 || s->sel >= s->dir->nchildren) { sound_play(SFX_BUMP); return; }
     DirEntry *e = s->dir->children[s->sel];
     s->dlgEntry = e;
     snprintf(s->dlgName, sizeof s->dlgName, "%s", e->name);
     s->dlg = ui_is_system_data(e) ? DLG_SYSTEM : DLG_DELETE;
+    sound_play(s->dlg == DLG_SYSTEM ? SFX_WARN : SFX_DIALOG);
 }
 
 static void do_delete(ui_state *s)
@@ -146,6 +166,7 @@ static void do_delete(ui_state *s)
     if (R_FAILED(rc)) {
         s->dlg      = DLG_ERROR;
         s->dlgError = rc;
+        sound_play(SFX_WARN);
         return;
     }
     int sel = s->sel;
@@ -153,6 +174,7 @@ static void do_delete(ui_state *s)
     s->dlg = DLG_NONE;
     int n = s->dir->nchildren;
     enter_dir(s, s->dir, sel < n ? sel : n - 1);
+    sound_play(SFX_DELETE);
 }
 
 // While a dialog is open it takes all input. Returns true if it did.
@@ -176,7 +198,10 @@ static bool handle_dialog(ui_state *s, const Input *in)
     }
 
     if (choice == DB_CONFIRM && s->dlg == DLG_DELETE) do_delete(s);
-    else if (choice != DB_NONE)                       s->dlg = DLG_NONE;
+    else if (choice != DB_NONE) {
+        s->dlg = DLG_NONE;
+        sound_play(SFX_CANCEL);
+    }
     return true;
 }
 
@@ -195,7 +220,7 @@ static void tap(ui_state *s, int x, int y, bool *rescan)
         else                                        back(s);
         return;
     case FB_MID:   middle_action(s, rescan);    return;
-    case FB_TYPES: s->legend = !s->legend;      return;
+    case FB_TYPES: toggle_legend(s);            return;
     default: break;
     }
     if (s->legend || y < LIST_Y || y >= FOOTER_Y) return;
@@ -203,7 +228,10 @@ static void tap(ui_state *s, int x, int y, bool *rescan)
     int idx = s->scroll + (y - LIST_Y) / ROW_H;
     if (idx >= s->dir->nchildren) return;
     if (idx == s->sel) open_selected(s);   // second tap opens
-    else               s->sel = idx;
+    else {
+        s->sel = idx;
+        sound_play(SFX_MOVE);
+    }
 }
 
 static void handle_input(ui_state *s, const Input *in, bool *rescan)
@@ -214,7 +242,7 @@ static void handle_input(ui_state *s, const Input *in, bool *rescan)
 
     if (in->down & KEY_START) s->running = false;
     if (in->down & KEY_X)     middle_action(s, rescan);
-    if (in->down & KEY_Y)     s->legend = !s->legend;
+    if (in->down & KEY_Y)     toggle_legend(s);
     if (in->down & KEY_B)     back(s);
     if (!s->legend) {
         if (rep & KEY_UP)               move_sel(s, -1);
@@ -303,6 +331,7 @@ static int do_scan(ui_state *s, int maxDepth, bool *quit)
     s->tree   = t;
     s->legend = false;
     enter_dir(s, t->root, 0);
+    sound_play(SFX_DONE);
     return 0;
 }
 
@@ -312,6 +341,7 @@ static bool scan_failed(int rc)
     const char *body = rc == -2 ? "The scan was cancelled." :
                        rc == -3 ? "Not enough memory to scan this card." :
                                   "Could not read the SD card.";
+    sound_play(SFX_WARN);
     while (aptMainLoop()) {
         render_message("Scan stopped", body);
         dbg_frame_done();
@@ -343,6 +373,8 @@ int ui_run(int maxDepth)
     C2D_Prepare();
     fontEnsureMapped();
     render_init();
+    bool audio = sound_init();     // silent if the DSP is unavailable
+    dbg_log(audio ? "sound: ndsp ready" : "sound: ndsp unavailable");
     dbg_init();
     hidSetRepeatParameters(18, 4);
 
@@ -383,6 +415,7 @@ int ui_run(int maxDepth)
         tree_free(s.tree);
         free(s.tree);
     }
+    sound_fini();
     render_fini();
     C2D_Fini();
     C3D_Fini();

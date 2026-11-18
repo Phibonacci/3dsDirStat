@@ -182,4 +182,12 @@ bool dbg_scan_cancel(void)
 
 bool dbg_quit(void) { return g_quit; }
 
+void dbg_log(const char *msg)
+{
+    FILE *f = fopen("sdmc:/logs/log.txt", "a");
+    if (!f) return;
+    fprintf(f, "%s\n", msg);
+    fclose(f);
+}
+
 #endif // SCRIPT

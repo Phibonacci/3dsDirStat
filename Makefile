@@ -80,10 +80,32 @@ LDLIBS		:=	$(LIBS)
 #---------------------------------------------------------------------------------
 # .smdh metadata.
 #---------------------------------------------------------------------------------
-APP_TITLE		:=	3DSDirStat
-APP_DESCRIPTION	:=	WinDirStat-like disk usage treemap for the 3DS
-APP_AUTHOR		:=	3DSDirStat
-APP_ICON		:=	$(CTRULIB)/default_icon.png
+APP_TITLE		:=	3dsDirStat
+APP_DESCRIPTION	:=	SD card disk usage
+APP_AUTHOR		:=	3dsDirStat
+APP_ICON		:=	$(CURDIR)/assets/icon.png
+
+# Embed the SMDH (icon, title) in the .3dsx so the Homebrew Launcher and
+# cxitool see it.
+_3DSXFLAGS		+=	--smdh=$(CURDIR)/$(OUTPUT).smdh
+$(OUTPUT).3dsx: $(OUTPUT).smdh
+
+#---------------------------------------------------------------------------------
+# CIA (installable title). `make cia` needs bannertool, cxitool and makerom.
+# The art in assets/ comes from assets/make_art.sh (ImageMagick); the banner
+# jingle is rendered from the app's own sound synthesizer (tools/sfxwav.c).
+#---------------------------------------------------------------------------------
+CIA_NAME		:=	DirStat
+CIA_PRODUCT		:=	CTR-H-DSTA
+CIA_TITLE_ID	:=	000400000FD15000
+HOSTCC			?=	gcc
+
+# Title version. Bump it for every release: the HOME Menu caches a title's
+# icon and banner and only reloads them when the installed version changes.
+VERSION_MAJOR	:=	1
+VERSION_MINOR	:=	0
+VERSION_MICRO	:=	1
+CIA_VERSION		:=	$(shell echo $$(( $(VERSION_MAJOR) * 1024 + $(VERSION_MINOR) * 16 + $(VERSION_MICRO) )))
 
 #---------------------------------------------------------------------------------
 # Targets.
@@ -91,7 +113,25 @@ APP_ICON		:=	$(CTRULIB)/default_icon.png
 all: $(OUTPUT).3dsx $(OUTPUT).smdh
 	@echo "built $(OUTPUT).3dsx + $(OUTPUT).smdh"
 
-clean:
-	@rm -f src/*.d $(OFILES) $(OUTPUT).elf $(OUTPUT).lst $(OUTPUT).3dsx $(OUTPUT).smdh
+assets/jingle.wav: tools/sfxwav.c src/sfx.c src/sfx.h
+	$(HOSTCC) -std=c11 -O2 -Isrc tools/sfxwav.c src/sfx.c -lm -o sfxwav.host
+	./sfxwav.host jingle $@
+	@rm -f sfxwav.host
 
-.PHONY: all clean
+$(OUTPUT).bnr: assets/banner.png assets/jingle.wav
+	bannertool makebanner -i assets/banner.png -a assets/jingle.wav -o $@
+
+$(OUTPUT).cxi: $(OUTPUT).3dsx $(OUTPUT).bnr
+	cxitool -n $(CIA_NAME) -c $(CIA_PRODUCT) -t $(CIA_TITLE_ID) -b $(OUTPUT).bnr $< $@
+
+$(OUTPUT).cia: $(OUTPUT).cxi Makefile
+	makerom -f cia -target t -ignoresign -ver $(CIA_VERSION) -i $<:0:0 -o $@
+
+cia: $(OUTPUT).cia
+	@echo "built $(OUTPUT).cia"
+
+clean:
+	@rm -f src/*.d $(OFILES) $(OUTPUT).elf $(OUTPUT).lst $(OUTPUT).3dsx $(OUTPUT).smdh \
+	       $(OUTPUT).bnr $(OUTPUT).cxi $(OUTPUT).cia
+
+.PHONY: all clean cia
