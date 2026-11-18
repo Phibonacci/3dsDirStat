@@ -4,7 +4,7 @@ See what takes up space on your Nintendo 3DS SD card, in the spirit of [WinDirSt
 
 <p align="center"><img src="assets/banner.png" alt="3dsDirStat banner"></p>
 
-<p align="center">https://github.com/user-attachments/assets/55b982b2-4df7-462e-9b9a-c0775054ce59</p>
+<div align="center">https://github.com/user-attachments/assets/55b982b2-4df7-462e-9b9a-c0775054ce59</div>
 
 ## Features
 
