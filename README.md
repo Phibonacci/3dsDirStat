@@ -60,3 +60,7 @@ Increase `VERSION_MAJOR` / `VERSION_MINOR` / `VERSION_MICRO` in the `Makefile` f
 
 - **Scripted UI tests**: `make SCRIPT=1` builds a version that replays button presses from `sdmc:/logs/script.txt` and saves screenshots of both screens. See `src/debug.h`.
 - **Art and sounds**: `assets/make_art.sh` regenerates the icon and banner. `tools/sfxwav.c` exports the app's synthesized sounds as WAV files.
+
+## AI disclaimer
+
+This is 100% made by AI in basically 1 hour using Claude Opus 5.5 (medium). I have no merit in this, it's as depressing as it gets.
