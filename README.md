@@ -1,8 +1,10 @@
 # 3dsDirStat
 
-See what takes up space on your Nintendo 3DS SD card, in the spirit of WinDirStat.
+See what takes up space on your Nintendo 3DS SD card, in the spirit of [WinDirStat](https://windirstat.net/).
 
 <p align="center"><img src="assets/banner.png" alt="3dsDirStat banner"></p>
+
+<video src="preview/3dsDirStat_preview.mp4"></video>
 
 ## Features
 
