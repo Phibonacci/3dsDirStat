@@ -55,8 +55,8 @@ static const ColorEntry kColors[CAT_COUNT] = {
     { CAT_NONE,   0x606060 },
     { CAT_3DS,    0x3B82F6 }, // blue
     { CAT_CIA,    0x8B5CF6 }, // violet
-    { CAT_NCA,    0x06B6D4 }, // cyan
-    { CAT_SAVE,   0xF59E0B }, // amber
+    { CAT_NCA,    0x0E7490 }, // dark cyan
+    { CAT_SAVE,   0x14B8A6 }, // teal
     { CAT_IMG,    0x22C55E }, // green
     { CAT_AUD,    0xEC4899 }, // pink
     { CAT_VID,    0xEF4444 }, // red

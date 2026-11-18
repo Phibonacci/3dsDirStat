@@ -8,10 +8,6 @@
 #include "treemap.h"
 
 #include <stdlib.h>
-#include <math.h>
-
-static float fmaxf_local(float a, float b) { return a > b ? a : b; }
-static float fminf_local(float a, float b) { return a < b ? a : b; }
 
 typedef struct {
     DirEntry *e;
@@ -27,108 +23,85 @@ static int cmp_area_desc(const void *a, const void *b)
     return 0;
 }
 
-// Worst aspect ratio introduced by a row of total area `s` and max item area `w`
-// inside a rectangle with squared long side `r2` and short side `rshort`.
-static float worst_area(float s, float w, float r2, float rshort)
+static void set_rect(DirEntry *e, float x, float y, float w, float h)
 {
-    float a = s + w;
-    float b = s - w;
-    return (2.0f * a * rshort) / (b * r2 + w * w);
+    e->rx = x; e->ry = y; e->rw = w; e->rh = h;
 }
 
-// Assign rectangles to a finalized row of `len` cells inside rectangle `r`.
-static void place_row(Rect r, Cell *row, int len)
+// Worst aspect ratio (>= 1) in a row of total area `s` whose largest and
+// smallest items are `rmax` / `rmin`, laid along a side of length `side`
+// (Bruls et al., eq. for worst(R, w)).
+static float worst(float s, float rmax, float rmin, float side)
 {
-    float s = 0.0f;
-    for (int j = 0; j < len; j++) s += row[j].area;
+    float s2 = s * s, w2 = side * side;
+    float a = w2 * rmax / s2;
+    float b = s2 / (w2 * rmin);
+    return a > b ? a : b;
+}
 
-    if (len <= 0 || s <= 0.0f) {
-        // Degenerate: give each cell an equal slice so nothing is lost.
-        if (r.w >= r.h) {
-            float slice = r.h / (float)len;
-            for (int j = 0; j < len; j++) {
-                Cell *c = &row[j];
-                c->e->rx = r.x; c->e->ry = r.y + (float)j * slice;
-                c->e->rw = r.w; c->e->rh = slice;
-            }
-        } else {
-            float slice = r.w / (float)len;
-            for (int j = 0; j < len; j++) {
-                Cell *c = &row[j];
-                c->e->rx = r.x + (float)j * slice; c->e->ry = r.y;
-                c->e->rw = slice; c->e->rh = r.h;
-            }
-        }
-        return;
-    }
-
+// Lay out one row as a strip along the SHORT side of `r` and return what is
+// left of `r`. Lengths along the strip are proportional to the items' areas, so
+// the strip is filled exactly; the last row also takes all remaining space so
+// rounding errors never leave a gap.
+static Rect place_row(Rect r, const Cell *row, int len, float s, int last)
+{
     if (r.w >= r.h) {
-        // Horizontal strip: full width, height proportional to row area.
-        float thickness = s / r.w;
-        float x = r.x;
-        for (int j = 0; j < len; j++) {
-            Cell *c = &row[j];
-            float w_ = c->area / thickness;
-            c->e->rx = x;   c->e->ry = r.y;
-            c->e->rw = w_;  c->e->rh = thickness;
-            x += w_;
-        }
-    } else {
-        // Vertical strip: full height, width proportional to row area.
-        float thickness = s / r.h;
+        // Wide: a column on the left, items stacked top to bottom.
+        float t = last ? r.w : s / r.h;
         float y = r.y;
         for (int j = 0; j < len; j++) {
-            Cell *c = &row[j];
-            float h_ = c->area / thickness;
-            c->e->rx = r.x; c->e->ry = y;
-            c->e->rw = thickness; c->e->rh = h_;
-            y += h_;
+            float h = j == len - 1 ? r.y + r.h - y : r.h * row[j].area / s;
+            set_rect(row[j].e, r.x, y, t, h);
+            y += h;
         }
+        r.x += t;
+        r.w -= t;
+    } else {
+        // Tall: a row at the top, items side by side.
+        float t = last ? r.h : s / r.w;
+        float x = r.x;
+        for (int j = 0; j < len; j++) {
+            float w = j == len - 1 ? r.x + r.w - x : r.w * row[j].area / s;
+            set_rect(row[j].e, x, r.y, w, t);
+            x += w;
+        }
+        r.y += t;
+        r.h -= t;
     }
+    if (r.w < 0.0f) r.w = 0.0f;
+    if (r.h < 0.0f) r.h = 0.0f;
+    return r;
 }
 
-// Fill rectangle `r` with the (already descending sorted) cells using squaring.
+// Fill rectangle `r` with the cells (sorted by area, largest first). Each row
+// grows while adding the next item does not make its worst aspect ratio worse,
+// which keeps cells close to square.
 static void squarified(Rect r, Cell *items, int n)
 {
-    if (n <= 0 || r.w <= 0.0f || r.h <= 0.0f) return;
+    // Zero-sized items (empty files/folders) get an empty rectangle.
+    int m = n;
+    while (m > 0 && items[m - 1].area <= 0.0f) m--;
+    for (int i = m; i < n; i++) set_rect(items[i].e, r.x, r.y, 0, 0);
 
-    Cell *row = malloc((size_t)n * sizeof(Cell));
-    if (!row) return;
-    int    rowLen = 0;
-    int    i = 0;
-
-    while (i < n) {
-        float s = 0.0f, mx = 0.0f;
-        for (int j = 0; j < rowLen; j++) {
-            s += row[j].area;
-            if (row[j].area > mx) mx = row[j].area;
+    int i = 0;
+    while (i < m) {
+        float side = r.w < r.h ? r.w : r.h;
+        if (side <= 0.0f) {
+            for (; i < m; i++) set_rect(items[i].e, r.x, r.y, 0, 0);
+            break;
         }
-        float r2     = fmaxf_local(r.w, r.h) * fmaxf_local(r.w, r.h);
-        float rshort = fminf_local(r.w, r.h);
-        float curWorst = rowLen == 0 ? 1e30f : worst_area(s, mx, r2, rshort);
-
-        float na   = items[i].area;
-        float addWorst = worst_area(s + na, fmaxf_local(mx, na), r2, rshort);
-
-        if (rowLen == 0 || addWorst <= curWorst) {
-            row[rowLen++] = items[i];
-            i++;
-        } else {
-            place_row(r, row, rowLen);
-            if (r.w >= r.h) {
-                float t = s / r.w;
-                r.y += t; r.h -= t;
-            } else {
-                float t = s / r.h;
-                r.x += t; r.w -= t;
-            }
-            rowLen = 0;
+        int   start = i;
+        float s     = items[i].area;
+        float cur   = worst(s, items[start].area, items[i].area, side);
+        for (i++; i < m; i++) {
+            float ns = s + items[i].area;
+            float nw = worst(ns, items[start].area, items[i].area, side);
+            if (nw > cur) break;
+            s   = ns;
+            cur = nw;
         }
+        r = place_row(r, items + start, i - start, s, i == m);
     }
-    if (rowLen > 0)
-        place_row(r, row, rowLen);
-
-    free(row);
 }
 
 void layout_tree(DirEntry *root, float px, float py, float pw, float ph,

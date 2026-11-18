@@ -4,10 +4,13 @@
 #include "render.h"
 #include "treemap.h"
 #include "debug.h"
+#include "fsops.h"
 
 #include <3ds.h>
 #include <citro2d.h>
 
+#include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -91,13 +94,112 @@ static void move_sel(ui_state *s, int delta)
     ensure_visible(s);
 }
 
-static void tap(ui_state *s, int x, int y)
+static void back(ui_state *s)
 {
-    if (y < BOT_HDR_H) {
-        if (!s->legend && x < BACK_BTN_W) go_up(s);
+    if (s->legend) s->legend = false;
+    else           go_up(s);
+}
+
+// ---------------------------------------------------------------------------
+// Deleting
+// ---------------------------------------------------------------------------
+
+static bool name_is(const DirEntry *e, const char *name)
+{
+    const char *a = e->name;
+    for (; *a && *name; a++, name++)
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*name)) return false;
+    return *a == *name;
+}
+
+bool ui_is_system_data(const DirEntry *e)
+{
+    const DirEntry *top = tree_top_level(e);
+    return top && name_is(top, "Nintendo 3DS");
+}
+
+bool ui_is_boot_file(const DirEntry *e)
+{
+    const DirEntry *top = tree_top_level(e);
+    return top && (name_is(top, "boot.firm") || name_is(top, "luma"));
+}
+
+// X / "Delete": ask for confirmation, or explain why system data can't be
+// deleted here.
+static void ask_delete(ui_state *s)
+{
+    if (s->sel < 0 || s->sel >= s->dir->nchildren) return;
+    DirEntry *e = s->dir->children[s->sel];
+    s->dlgEntry = e;
+    snprintf(s->dlgName, sizeof s->dlgName, "%s", e->name);
+    s->dlg = ui_is_system_data(e) ? DLG_SYSTEM : DLG_DELETE;
+}
+
+static void do_delete(ui_state *s)
+{
+    DirEntry *e = s->dlgEntry;
+    s->dlg = DLG_BUSY;
+    render_frame(s);                 // show "Deleting..." while the card works
+
+    Result rc = fs_delete_entry(e);
+    s->dlgEntry = NULL;
+    if (R_FAILED(rc)) {
+        s->dlg      = DLG_ERROR;
+        s->dlgError = rc;
         return;
     }
+    int sel = s->sel;
+    tree_remove(s->tree, e);
+    s->dlg = DLG_NONE;
+    int n = s->dir->nchildren;
+    enter_dir(s, s->dir, sel < n ? sel : n - 1);
+}
+
+// While a dialog is open it takes all input. Returns true if it did.
+static bool handle_dialog(ui_state *s, const Input *in)
+{
+    if (s->dlg == DLG_NONE) return false;
+    if (s->dlg == DLG_BUSY) return true;
+
+    int choice = DB_NONE;
+    if (in->down & KEY_A) choice = DB_CONFIRM;
+    if (in->down & KEY_B) choice = s->dlg == DLG_DELETE ? DB_CANCEL : DB_CONFIRM;
+
+    if (in->held & KEY_TOUCH) {            // track the stylus for button feedback
+        s->touching = true;
+        s->dragged  = false;
+        s->touchX   = in->touch.px;
+        s->touchY   = in->touch.py;
+    } else if (s->touching) {
+        s->touching = false;
+        choice = render_dialog_button_at(s, s->touchX, s->touchY);
+    }
+
+    if (choice == DB_CONFIRM && s->dlg == DLG_DELETE) do_delete(s);
+    else if (choice != DB_NONE)                       s->dlg = DLG_NONE;
+    return true;
+}
+
+// X / middle button: "Delete" on the folder list, "Rescan" on the file types.
+static void middle_action(ui_state *s, bool *rescan)
+{
+    if (s->legend) *rescan = true;
+    else           ask_delete(s);
+}
+
+static void tap(ui_state *s, int x, int y, bool *rescan)
+{
+    switch (render_footer_button_at(x, y)) {
+    case FB_BACK:
+        if (!s->legend && s->dir == s->tree->root) s->running = false;  // "Close"
+        else                                        back(s);
+        return;
+    case FB_MID:   middle_action(s, rescan);    return;
+    case FB_TYPES: s->legend = !s->legend;      return;
+    default: break;
+    }
     if (s->legend || y < LIST_Y || y >= FOOTER_Y) return;
+    if ((y - LIST_Y) % ROW_H >= ROW_BTN_H + 2) return;  // gap between buttons
     int idx = s->scroll + (y - LIST_Y) / ROW_H;
     if (idx >= s->dir->nchildren) return;
     if (idx == s->sel) open_selected(s);   // second tap opens
@@ -106,15 +208,14 @@ static void tap(ui_state *s, int x, int y)
 
 static void handle_input(ui_state *s, const Input *in, bool *rescan)
 {
+    if (handle_dialog(s, in)) return;
+
     u32 rep = in->repeat;
 
     if (in->down & KEY_START) s->running = false;
-    if (in->down & KEY_X)     *rescan = true;
+    if (in->down & KEY_X)     middle_action(s, rescan);
     if (in->down & KEY_Y)     s->legend = !s->legend;
-    if (in->down & KEY_B) {
-        if (s->legend) s->legend = false;
-        else           go_up(s);
-    }
+    if (in->down & KEY_B)     back(s);
     if (!s->legend) {
         if (rep & KEY_UP)               move_sel(s, -1);
         if (rep & KEY_DOWN)             move_sel(s, +1);
@@ -143,7 +244,7 @@ static void handle_input(ui_state *s, const Input *in, bool *rescan)
         }
     } else if (s->touching) {
         s->touching = false;
-        if (!s->dragged) tap(s, s->touchX, s->touchY);
+        if (!s->dragged) tap(s, s->touchX, s->touchY, rescan);
     }
 }
 
@@ -165,7 +266,13 @@ static bool on_progress(const ScanStatus *st, void *userdata)
 
     if (!aptMainLoop()) { u->quit = true; return true; }
     hidScanInput();
-    if (hidKeysDown() & KEY_SELECT) return true;
+    u32 down = hidKeysDown();
+    if ((down & KEY_SELECT) || dbg_scan_cancel()) return true;
+    if (down & KEY_TOUCH) {
+        touchPosition t;
+        hidTouchRead(&t);
+        if (render_footer_button_at(t.px, t.py) == FB_MID) return true; // "Cancel"
+    }
 
     render_scan(st, now - u->start);
     dbg_scan_frame_done();
@@ -206,11 +313,20 @@ static bool scan_failed(int rc)
                        rc == -3 ? "Not enough memory to scan this card." :
                                   "Could not read the SD card.";
     while (aptMainLoop()) {
-        render_message("Scan stopped", body, "A  Scan again          START  Exit");
+        render_message("Scan stopped", body);
+        dbg_frame_done();
+        if (dbg_quit()) return false;
         hidScanInput();
         u32 k = hidKeysDown();
         if (k & KEY_A) return true;
         if (k & (KEY_START | KEY_B)) return false;
+        if (k & KEY_TOUCH) {
+            touchPosition t;
+            hidTouchRead(&t);
+            int b = render_message_button_at(t.px, t.py);
+            if (b == MB_RETRY) return true;
+            if (b == MB_CLOSE) return false;
+        }
     }
     return false;
 }
@@ -223,7 +339,7 @@ int ui_run(int maxDepth)
 {
     gfxInitDefault();
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
-    C2D_Init(C2D_DEFAULT_MAX_OBJECTS * 2);
+    C2D_Init(C2D_DEFAULT_MAX_OBJECTS * 4);  // anti-aliased shapes use many triangles
     C2D_Prepare();
     fontEnsureMapped();
     render_init();

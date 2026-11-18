@@ -25,6 +25,7 @@ static bool g_quit;
 static char g_scanshot[32];
 static int  g_scanframes;
 static int  g_tap_release = -1; // frame on which a scripted tap is released
+static bool g_scancancel;
 
 static u32 key_by_name(const char *s)
 {
@@ -50,6 +51,7 @@ void dbg_init(void)
         memset(&c, 0, sizeof c);
         char verb[16] = "", a[32] = "";
         if (sscanf(line, "scanshot %31s", g_scanshot) == 1) continue;
+        if (strncmp(line, "scancancel", 10) == 0) { g_scancancel = true; continue; }
         int n = sscanf(line, "%d %15s %31s %d", &c.frame, verb, a, &c.y);
         if (n < 2) continue;
         if (strcmp(verb, "key") == 0 && n >= 3) {
@@ -168,7 +170,14 @@ void dbg_frame_done(void)
 
 void dbg_scan_frame_done(void)
 {
-    if (g_scanshot[0] && ++g_scanframes == 3) shot(g_scanshot);
+    if (++g_scanframes == 3 && g_scanshot[0]) shot(g_scanshot);
+}
+
+bool dbg_scan_cancel(void)
+{
+    if (!g_scancancel || g_scanframes < 1) return false;
+    g_scancancel = false;
+    return true;
 }
 
 bool dbg_quit(void) { return g_quit; }

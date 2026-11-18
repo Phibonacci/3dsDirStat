@@ -8,6 +8,10 @@
 //     <frame> shot <name>        dump both LCDs to sdmc:/logs/<name>_{top,bot}.ppm
 //     <frame> quit
 //     scanshot <name>            dump the screens while the scan is running
+//     scancancel                 cancel the scan (shows the "scan stopped" screen)
+//
+// If sdmc:/logs/font.bcfnt exists it replaces the system font, e.g. a TTF
+// converted with `mkbcfnt -s 17` (matches the system font's 24x30 cells).
 //
 // Screenshots read the real LCD framebuffers, so they show exactly what the
 // console displays (unlike an offscreen render target).
@@ -27,12 +31,14 @@ void dbg_init(void);
 void dbg_input(Input *in);      // merge scripted events for this frame
 void dbg_frame_done(void);      // after the frame is rendered: shots, frame++
 void dbg_scan_frame_done(void); // after a scan progress frame is rendered
+bool dbg_scan_cancel(void);     // true once if the script cancels the scan
 bool dbg_quit(void);
 #else
 static inline void dbg_init(void) {}
 static inline void dbg_input(Input *in) { (void)in; }
 static inline void dbg_frame_done(void) {}
 static inline void dbg_scan_frame_done(void) {}
+static inline bool dbg_scan_cancel(void) { return false; }
 static inline bool dbg_quit(void) { return false; }
 #endif
 

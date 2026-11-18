@@ -126,6 +126,111 @@ static void test_layout(void)
     tree_free(&t);
 }
 
+// Worst aspect ratio (long side / short side) among `dir`'s laid-out children.
+static float worst_aspect(const DirEntry *dir)
+{
+    float worst = 1.0f;
+    for (int i = 0; i < dir->nchildren; i++) {
+        const DirEntry *c = dir->children[i];
+        if (c->rw <= 0 || c->rh <= 0) continue;
+        float a = c->rw > c->rh ? c->rw / c->rh : c->rh / c->rw;
+        if (a > worst) worst = a;
+    }
+    return worst;
+}
+
+static void test_squareness(void)
+{
+    printf("[squareness]\n");
+    // Equal items in a wide rectangle (the top screen's map) must form a grid of
+    // near-square cells, not a row of thin strips.
+    Tree t;
+    tree_init(&t);
+    for (int i = 0; i < 12; i++) {
+        char name[16];
+        snprintf(name, sizeof name, "d%d", i);
+        tree_add_child(&t, t.root, name, 0, 1000);
+    }
+    tree_compute_sizes(&t);
+    layout_tree(t.root, 0, 0, 384, 160, 1, 0.0f);
+    float w = worst_aspect(t.root);
+    printf("  12 equal items: worst aspect %.2f\n", w);
+    CHECK(w < 2.0f, "equal items are close to square");
+    tree_free(&t);
+
+    // Typical skewed SD card: a few big folders and a long tail.
+    tree_init(&t);
+    static const uint64_t sz[] = { 18000, 5150, 2860, 2480, 2190, 1910, 1140, 684, 488, 300, 120, 60 };
+    for (int i = 0; i < 12; i++) {
+        char name[16];
+        snprintf(name, sizeof name, "e%d", i);
+        tree_add_child(&t, t.root, name, 0, sz[i]);
+    }
+    tree_compute_sizes(&t);
+    layout_tree(t.root, 0, 0, 384, 160, 1, 0.0f);
+    w = worst_aspect(t.root);
+    printf("  skewed items: worst aspect %.2f\n", w);
+    CHECK(w < 3.5f, "skewed items stay reasonably square");
+
+    // Coverage: rectangles fill the parent exactly and stay inside it.
+    float area = 0;
+    int inside = 1;
+    for (int i = 0; i < t.root->nchildren; i++) {
+        DirEntry *c = t.root->children[i];
+        area += c->rw * c->rh;
+        if (c->rx < -0.01f || c->ry < -0.01f || c->rx + c->rw > 384.01f || c->ry + c->rh > 160.01f)
+            inside = 0;
+    }
+    CHECK(area > 384 * 160 * 0.999f && area < 384 * 160 * 1.001f, "skewed items cover the rectangle");
+    CHECK(inside, "skewed items stay inside the rectangle");
+    tree_free(&t);
+}
+
+static void test_remove(void)
+{
+    printf("[remove]\n");
+    Tree t;
+    tree_init(&t);
+    build_known(&t);
+    tree_compute_sizes(&t);
+    tree_sort(&t);
+    tree_classify(&t);
+
+    DirEntry *games = NULL, *nest = NULL;
+    for (int i = 0; i < t.root->nchildren; i++)
+        if (strcmp(t.root->children[i]->name, "Games") == 0) games = t.root->children[i];
+    CHECK(games != NULL, "Games found");
+    for (int i = 0; games && i < games->nchildren; i++)
+        if (strcmp(games->children[i]->name, "Nest") == 0) nest = games->children[i];
+    CHECK(nest != NULL, "Nest found");
+    CHECK(tree_top_level(nest) == games, "top level of Nest is Games");
+    CHECK(tree_top_level(games) == games, "top level of Games is itself");
+    CHECK(tree_top_level(t.root) == NULL, "root has no top level");
+
+    int before = t.nnodes;
+    uint64_t rootBefore = t.root->size;
+    tree_remove(&t, nest);   // 450 bytes, 3 files, 4 nodes
+    CHECK(t.nnodes == before - 4, "subtree nodes removed from the node list");
+    CHECK(games->size == 20 && games->nfiles == 1, "parent size/count updated");
+    CHECK(t.root->size == rootBefore - 450, "root size updated");
+    CHECK(games->nchildren == 1, "parent lost the child");
+    int linked = 1;
+    for (int i = 0; i < t.nnodes; i++)
+        if (t.nodes[i] != t.root && !t.nodes[i]->parent) linked = 0;
+    CHECK(linked, "remaining nodes intact");
+
+    // Removing the largest entry re-sorts nothing below, but sizes still add up.
+    tree_remove(&t, t.root->children[0]);
+    uint64_t sum = 0;
+    for (int i = 0; i < t.root->nchildren; i++) sum += t.root->children[i]->size;
+    CHECK(sum == t.root->size, "root size equals the sum of its children");
+    int sorted = 1;
+    for (int i = 1; i < t.root->nchildren; i++)
+        if (t.root->children[i - 1]->size < t.root->children[i]->size) sorted = 0;
+    CHECK(sorted, "root children still sorted");
+    tree_free(&t);
+}
+
 static void test_sizes(void)
 {
     printf("[sizes]\n");
@@ -165,6 +270,8 @@ static void test_colors(void)
 int main(void)
 {
     test_layout();
+    test_squareness();
+    test_remove();
     test_sizes();
     test_colors();
 

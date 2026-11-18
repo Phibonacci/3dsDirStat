@@ -161,6 +161,76 @@ static int largest_file_category(DirEntry *e)
     return largest_file_category(best);
 }
 
+const DirEntry *tree_top_level(const DirEntry *e)
+{
+    if (!e || !e->parent) return NULL;
+    while (e->parent->parent) e = e->parent;
+    return e;
+}
+
+static int is_within(const DirEntry *n, const DirEntry *e)
+{
+    for (; n; n = n->parent)
+        if (n == e) return 1;
+    return 0;
+}
+
+void tree_remove(Tree *t, DirEntry *e)
+{
+    DirEntry *parent = e->parent;
+    if (!parent) return;
+
+    // Detach from the parent (keeps the size order of the remaining children).
+    for (int i = 0; i < parent->nchildren; i++) {
+        if (parent->children[i] == e) {
+            memmove(&parent->children[i], &parent->children[i + 1],
+                    (size_t)(parent->nchildren - i - 1) * sizeof(DirEntry *));
+            parent->nchildren--;
+            break;
+        }
+    }
+
+    // Drop the subtree from the flat node list (order preserved). The parent
+    // links are still intact here, so is_within() works.
+    int w = 0;
+    for (int i = 0; i < t->nnodes; i++)
+        if (!is_within(t->nodes[i], e))
+            t->nodes[w++] = t->nodes[i];
+    t->nnodes = w;
+
+    for (DirEntry *p = parent; p; p = p->parent) {
+        p->size   -= e->size;
+        p->nfiles -= e->nfiles;
+    }
+
+    // Free the subtree (children before parents).
+    {
+        // Iterative post-order free using the children arrays.
+        DirEntry *n = e;
+        while (n) {
+            if (n->nchildren > 0) {
+                n = n->children[--n->nchildren];
+                continue;
+            }
+            DirEntry *up = n == e ? NULL : n->parent;
+            free(n->name);
+            free(n->ext);
+            free(n->children);
+            free(n);
+            n = up;
+        }
+    }
+
+    // Ancestors got smaller: restore the size order among their siblings and
+    // refresh their colour category.
+    for (DirEntry *p = parent; p; p = p->parent) {
+        if (p->parent && p->parent->nchildren > 1)
+            qsort(p->parent->children, (size_t)p->parent->nchildren,
+                  sizeof(DirEntry *), cmp_size_desc);
+        p->category = largest_file_category(p);
+    }
+}
+
 void tree_classify(Tree *t)
 {
     for (int i = 0; i < t->nnodes; i++)

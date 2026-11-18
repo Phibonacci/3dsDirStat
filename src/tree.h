@@ -50,6 +50,15 @@ void   tree_compute_sizes(Tree *t);
 // Sort every directory's children by size, largest first (ties by name).
 void   tree_sort(Tree *t);
 
+// Remove `e` and its whole subtree from the tree and free it (after it has been
+// deleted from the card). Ancestors lose its size and file count, are
+// re-sorted among their siblings and re-classified. `e` must not be the root.
+void   tree_remove(Tree *t, DirEntry *e);
+
+// The ancestor of `e` that sits directly in the root (e itself if it does),
+// or NULL for the root.
+const DirEntry *tree_top_level(const DirEntry *e);
+
 // Assign a color category to every entry. Files use their extension; directories
 // inherit the category of their largest descendant file so categories group nicely.
 void   tree_classify(Tree *t);
